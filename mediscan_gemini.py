@@ -7,6 +7,12 @@ import re
 from PIL import Image
 import io
 
+try:
+    import fitz  # PyMuPDF
+    PDF_SUPPORTED = True
+except ImportError:
+    PDF_SUPPORTED = False
+
 # ─────────────────────────────────────────────────────────────
 # PAGE CONFIG
 # ─────────────────────────────────────────────────────────────
@@ -228,16 +234,20 @@ except KeyError:
 # ─────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-/* Hide the file uploader label text (we use our own heading) */
-[data-testid="stFileUploaderDropzoneInstructions"] div span { display: none; }
-[data-testid="stFileUploaderDropzoneInstructions"]::before {
-  content: "Drop scan here or click to browse";
-  font-family: 'Space Grotesk', sans-serif;
-  font-size: .85rem;
-  color: #4A6878;
+/* Hide Streamlit's default file uploader browse button label overlap */
+[data-testid="stFileUploaderDropzone"] button { display: none !important; }
+[data-testid="stFileUploaderDropzone"] {
+  background: #0D1520 !important;
+  border: 1.5px dashed #1E3A4A !important;
+  border-radius: 14px !important;
+  padding: 2rem 1rem !important;
+  text-align: center !important;
+  cursor: pointer !important;
+  transition: border-color .25s;
 }
-/* Fix column padding */
-[data-testid="stFileUploader"] { width: 100%; }
+[data-testid="stFileUploaderDropzone"]:hover { border-color: #00C9A7 !important; }
+[data-testid="stFileUploaderDropzone"] small { display: none !important; }
+[data-testid="stFileUploaderDropzoneInstructions"] { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -245,6 +255,9 @@ st.markdown("""
 <div style="padding:0 3rem 1.2rem;">
   <p style="font-family:'Syne',sans-serif;font-size:1.2rem;font-weight:700;
      color:#E8F0F7;letter-spacing:-.02em;">Upload Medical Scan</p>
+  <p style="font-family:'Space Grotesk',sans-serif;font-size:.78rem;color:#4A6878;margin-top:.3rem;">
+    Accepts PNG, JPG, WEBP images and PDF reports
+  </p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -252,19 +265,38 @@ col_left, col_right = st.columns([1, 1], gap="large")
 
 with col_left:
     st.markdown('<div style="padding:0 0 0 3rem;">', unsafe_allow_html=True)
+
+    # Single uploader that accepts both images and PDFs
     uploaded_file = st.file_uploader(
-        "Scan upload",
-        type=["png", "jpg", "jpeg", "webp"],
+        "Upload scan (PNG, JPG, WEBP, PDF)",
+        type=["png", "jpg", "jpeg", "webp", "pdf"],
         label_visibility="collapsed",
         key="uploader"
     )
+
     if uploaded_file:
-        st.markdown("""
-        <div style="background:#0D1520;border:1px solid #1E3A4A;border-radius:12px;
-             padding:.8rem;margin-top:.5rem;overflow:hidden;">
-        """, unsafe_allow_html=True)
-        st.image(uploaded_file, caption="", use_container_width=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+        is_pdf = uploaded_file.name.lower().endswith(".pdf")
+        if is_pdf:
+            st.markdown(f"""
+            <div style="background:#0D1520;border:1px solid #1E3A4A;border-radius:12px;
+                 padding:1rem 1.2rem;margin-top:.5rem;display:flex;align-items:center;gap:.8rem;">
+              <span style="font-size:1.4rem;">📄</span>
+              <div>
+                <p style="font-family:'Syne',sans-serif;font-size:.88rem;font-weight:700;
+                   color:#E8F0F7;margin-bottom:.15rem;">{uploaded_file.name}</p>
+                <p style="font-family:'Space Grotesk',sans-serif;font-size:.72rem;color:#00C9A7;">
+                  PDF detected — will convert first page to image for analysis
+                </p>
+              </div>
+            </div>""", unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div style="background:#0D1520;border:1px solid #1E3A4A;border-radius:12px;
+                 padding:.8rem;margin-top:.5rem;overflow:hidden;">
+            """, unsafe_allow_html=True)
+            st.image(uploaded_file, caption="", use_container_width=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+
     st.markdown("</div>", unsafe_allow_html=True)
 
 with col_right:
@@ -287,6 +319,25 @@ with col_right:
     st.markdown("<br>", unsafe_allow_html=True)
     analyze_btn = st.button("⬡  Run Gemini Diagnostic", use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────
+# PDF → IMAGE CONVERSION
+# ─────────────────────────────────────────────────────────────
+
+def pdf_to_image(pdf_bytes: bytes) -> bytes:
+    """Convert first page of PDF to a high-res JPEG image."""
+    if not PDF_SUPPORTED:
+        raise RuntimeError("PyMuPDF not installed. Run: pip install pymupdf")
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    page = doc[0]
+    # 2x zoom for high resolution
+    mat = fitz.Matrix(2.0, 2.0)
+    pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB)
+    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=95)
+    return buf.getvalue()
 
 
 # ─────────────────────────────────────────────────────────────
@@ -375,15 +426,25 @@ if analyze_btn:
         <div style="margin:1rem 3rem;background:#1A1508;border:1px solid #F59E0B55;
              border-radius:10px;padding:.9rem 1.2rem;
              font-family:'Space Grotesk',sans-serif;font-size:.88rem;color:#F59E0B;">
-          ⚠️  Please upload a medical image before running analysis.
+          ⚠️  Please upload a medical scan or report before running analysis.
         </div>""", unsafe_allow_html=True)
     else:
-        # Normalize image to clean JPEG bytes
         raw_bytes = uploaded_file.read()
-        pil_raw   = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
-        buf       = io.BytesIO()
-        pil_raw.save(buf, format="JPEG", quality=92)
-        img_bytes = buf.getvalue()
+        is_pdf    = uploaded_file.name.lower().endswith(".pdf")
+
+        # ── Convert PDF → JPEG if needed
+        if is_pdf:
+            with st.spinner("Converting PDF to image…"):
+                try:
+                    img_bytes = pdf_to_image(raw_bytes)
+                except Exception as e:
+                    st.error(f"PDF conversion failed: {e}. Make sure PyMuPDF is installed.")
+                    st.stop()
+        else:
+            pil_raw = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
+            buf     = io.BytesIO()
+            pil_raw.save(buf, format="JPEG", quality=92)
+            img_bytes = buf.getvalue()
 
         # ── Step 1: Diagnosis via Gemini Vision
         with st.spinner("Step 1 / 3 — Gemini Vision analyzing your scan…"):
