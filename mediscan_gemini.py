@@ -142,8 +142,9 @@ st.markdown("""
   </div>
   <div style="display:flex; gap:.8rem; align-items:center;">
     <span class="ms-badge-gem">Gemini Vision · Diagnosis</span>
-    <span class="ms-badge-gem">Gemini 3 Pro Image · Visuals</span>
-    <span class="ms-badge-gem">v4.0</span>
+    <span class="ms-badge-gem">Nano Banana 2 · Body Map</span>
+    <span class="ms-badge-gem">Veo 3.1 · Exercise Videos</span>
+    <span class="ms-badge-gem">v5.0</span>
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -187,8 +188,8 @@ st.markdown("""
   <h1 class="ms-h1">Diagnose. Visualize.<br><span class="italic accent">Rehabilitate.</span></h1>
   <p class="ms-body">
     Upload any X-ray, MRI, CT scan, or medical report. Gemini Vision diagnoses the condition,
-    Gemini 3 Pro Image generates a real anatomical body map highlighting affected regions,
-    and illustrates every exercise in your rehabilitation plan — all AI, no YouTube.
+    Nano Banana 2 generates a real anatomical body map highlighting affected regions,
+    and Veo 3.1 generates an actual video demonstration of every exercise in your rehab plan.
   </p>
   <div class="ms-pipeline">
     <div class="ms-pipe-step"><div class="num">1</div>Upload Scan</div>
@@ -197,7 +198,7 @@ st.markdown("""
     <div class="ms-pipe-arrow">→</div>
     <div class="ms-pipe-step"><div class="num">3</div>AI Body Map Generated</div>
     <div class="ms-pipe-arrow">→</div>
-    <div class="ms-pipe-step"><div class="num">4</div>AI Exercise Illustrations</div>
+    <div class="ms-pipe-step"><div class="num">4</div>Veo Exercise Videos</div>
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -400,7 +401,7 @@ Make body_map_prompt and illustration_prompts vivid and specific to the actual c
 
 
 def generate_image(prompt: str, api_key: str, style_suffix: str = "") -> Image.Image | None:
-    """Gemini 3 Pro Image — generate an image from a text prompt."""
+    """Nano Banana 2 — generate body map image."""
     try:
         client = get_client(api_key)
         full_prompt = prompt + (style_suffix or "")
@@ -412,7 +413,32 @@ def generate_image(prompt: str, api_key: str, style_suffix: str = "") -> Image.I
             if part.inline_data is not None:
                 return Image.open(io.BytesIO(part.inline_data.data))
     except Exception as e:
-        st.warning(f"Image generation failed: {e}")
+        st.warning(f"Body map generation failed: {e}")
+    return None
+
+
+def generate_exercise_video(prompt: str, api_key: str) -> bytes | None:
+    """Veo 3.1 — generate an exercise demonstration video. Returns raw MP4 bytes."""
+    import time
+    try:
+        client = get_client(api_key)
+        operation = client.models.generate_videos(
+            model="veo-3.1-generate-preview",
+            prompt=prompt,
+        )
+        # Poll until done (Veo is async, typically 30-90s)
+        for _ in range(30):  # max ~5 min
+            if operation.done:
+                break
+            time.sleep(10)
+            operation = client.operations.get(operation)
+
+        if operation.done and operation.response.generated_videos:
+            video = operation.response.generated_videos[0]
+            client.files.download(file=video.video)
+            return video.video.video_bytes
+    except Exception as e:
+        st.warning(f"Exercise video generation failed: {e}")
     return None
 
 
@@ -450,9 +476,9 @@ if analyze_btn:
         with st.spinner("Step 1 / 3 — Gemini Vision analyzing your scan…"):
             try:
                 result = analyze_with_gemini(img_bytes, GEMINI_API_KEY, context_text)
-                st.session_state["result"]       = result
-                st.session_state["body_map_img"] = None
-                st.session_state["exercise_imgs"]= {}
+                st.session_state["result"]         = result
+                st.session_state["body_map_img"]   = None
+                st.session_state["exercise_videos"]= {}
             except Exception as e:
                 st.error(f"Diagnosis failed: {e}")
                 st.stop()
@@ -468,25 +494,23 @@ if analyze_btn:
                 )
                 st.session_state["body_map_img"] = img
 
-        # ── Step 3: Exercise illustrations via Gemini 3 Pro Image
+        # ── Step 3: Exercise videos via Veo 3.1
         exercises = result.get("exercises", [])
-        ex_imgs   = {}
+        ex_videos = {}
         if exercises and result.get("exercise_needed", True):
             n = len(exercises[:4])
             for i, ex in enumerate(exercises[:4]):
-                with st.spinner(f"Step 3 / 3 — Illustrating exercise {i+1} of {n}…"):
-                    ex_prompt = ex.get(
-                        "illustration_prompt",
-                        f"A person performing {ex.get('name','an exercise')} correctly, fitness guide illustration."
+                with st.spinner(f"Step 3 / 3 — Veo generating exercise video {i+1} of {n}… (may take ~60s)"):
+                    ex_prompt = (
+                        ex.get("illustration_prompt",
+                               f"A person performing {ex.get('name','an exercise')} correctly.")
+                        + " Fitness demonstration video, clear body form, bright studio lighting, "
+                          "plain white background, slow and instructional pace, no text overlays."
                     )
-                    img = generate_image(
-                        ex_prompt,
-                        GEMINI_API_KEY,
-                        " Clean white background, flat instructional illustration, physical therapy style."
-                    )
-                    if img:
-                        ex_imgs[i] = img
-        st.session_state["exercise_imgs"] = ex_imgs
+                    video_bytes = generate_exercise_video(ex_prompt, GEMINI_API_KEY)
+                    if video_bytes:
+                        ex_videos[i] = video_bytes
+        st.session_state["exercise_videos"] = ex_videos
         st.rerun()
 
 
@@ -494,9 +518,9 @@ if analyze_btn:
 # RESULTS DISPLAY
 # ─────────────────────────────────────────────────────────────
 
-result   = st.session_state.get("result")
-body_map = st.session_state.get("body_map_img")
-ex_imgs  = st.session_state.get("exercise_imgs", {})
+result     = st.session_state.get("result")
+body_map   = st.session_state.get("body_map_img")
+ex_videos  = st.session_state.get("exercise_videos", {})
 
 if result:
     st.markdown("""
@@ -555,147 +579,182 @@ if result:
     </div>
     """, unsafe_allow_html=True)
 
-    # Three columns
+    # ── Full-width row layout
     st.markdown('<div style="padding:0 3rem;">', unsafe_allow_html=True)
-    col_f, col_b, col_e = st.columns([1.1, .9, 1.35], gap="large")
 
-    # ── Findings + Recommendations
-    with col_f:
-        st.markdown("""
-        <p style="font-family:'Space Grotesk',sans-serif;font-size:.62rem;font-weight:600;
-           color:#4A6878;letter-spacing:.14em;text-transform:uppercase;margin-bottom:.9rem;">
-          ⬡ Key Findings
-        </p>""", unsafe_allow_html=True)
+    # ── ROW 1: Key Findings + Recommendations side by side
+    st.markdown("""
+    <p style="font-family:'Space Grotesk',sans-serif;font-size:.62rem;font-weight:600;
+       color:#4A6878;letter-spacing:.14em;text-transform:uppercase;margin-bottom:.9rem;">
+      ⬡ Key Findings
+    </p>""", unsafe_allow_html=True)
 
-        for i, f in enumerate(result.get("findings", [])):
-            st.markdown(f"""
-            <div style="display:flex;gap:.8rem;align-items:flex-start;margin-bottom:.65rem;
-                 padding:.85rem 1rem;background:#0D1520;border-radius:10px;border-left:2px solid #00C9A7;">
-              <span style="font-family:'Syne',sans-serif;font-size:.65rem;font-weight:800;
-                 color:#00C9A7;padding-top:1px;flex-shrink:0;min-width:16px;">0{i+1}</span>
-              <span style="font-family:'Space Grotesk',sans-serif;font-size:.83rem;
-                 color:#A8C0CC;line-height:1.5;">{f}</span>
-            </div>""", unsafe_allow_html=True)
+    findings_cols = st.columns(2, gap="large")
+    findings = result.get("findings", [])
+    mid = (len(findings) + 1) // 2
+    for col, chunk in zip(findings_cols, [findings[:mid], findings[mid:]]):
+        with col:
+            for i, f in enumerate(chunk):
+                idx = findings.index(f)
+                st.markdown(f"""
+                <div style="display:flex;gap:.8rem;align-items:flex-start;margin-bottom:.65rem;
+                     padding:.85rem 1rem;background:#0D1520;border-radius:10px;border-left:2px solid #00C9A7;">
+                  <span style="font-family:'Syne',sans-serif;font-size:.65rem;font-weight:800;
+                     color:#00C9A7;padding-top:1px;flex-shrink:0;min-width:16px;">0{idx+1}</span>
+                  <span style="font-family:'Space Grotesk',sans-serif;font-size:.88rem;
+                     color:#A8C0CC;line-height:1.55;">{f}</span>
+                </div>""", unsafe_allow_html=True)
 
-        st.markdown("""<div style="height:.8rem;"></div>
-        <p style="font-family:'Space Grotesk',sans-serif;font-size:.62rem;font-weight:600;
-           color:#4A6878;letter-spacing:.14em;text-transform:uppercase;margin-bottom:.9rem;">
-          ⬡ Clinical Recommendations
-        </p>""", unsafe_allow_html=True)
+    st.markdown("""<div style="height:1.2rem;"></div>
+    <p style="font-family:'Space Grotesk',sans-serif;font-size:.62rem;font-weight:600;
+       color:#4A6878;letter-spacing:.14em;text-transform:uppercase;margin-bottom:.9rem;">
+      ⬡ Clinical Recommendations
+    </p>""", unsafe_allow_html=True)
 
-        for rec in result.get("recommendations", []):
+    rec_cols = st.columns(3, gap="large")
+    for i, rec in enumerate(result.get("recommendations", [])):
+        with rec_cols[i % 3]:
             st.markdown(f"""
             <div style="display:flex;gap:.8rem;align-items:flex-start;margin-bottom:.65rem;
                  padding:.85rem 1rem;background:#0D1520;border-radius:10px;border-left:2px solid #0096B4;">
               <span style="font-family:'Syne',sans-serif;font-size:.85rem;color:#0096B4;flex-shrink:0;">→</span>
-              <span style="font-family:'Space Grotesk',sans-serif;font-size:.83rem;
-                 color:#A8C0CC;line-height:1.5;">{rec}</span>
+              <span style="font-family:'Space Grotesk',sans-serif;font-size:.88rem;
+                 color:#A8C0CC;line-height:1.55;">{rec}</span>
             </div>""", unsafe_allow_html=True)
 
-    # ── Body Map — AI Generated Image
-    with col_b:
-        st.markdown("""
-        <p style="font-family:'Space Grotesk',sans-serif;font-size:.62rem;font-weight:600;
-           color:#4A6878;letter-spacing:.14em;text-transform:uppercase;margin-bottom:.9rem;">
-          ⬡ AI Body Map — Affected Regions
-        </p>""", unsafe_allow_html=True)
+    # ── DIVIDER
+    st.markdown('<div style="height:1px;background:linear-gradient(90deg,#1E3A4A,#090E14);margin:2rem 0;"></div>', unsafe_allow_html=True)
 
-        if body_map:
-            st.markdown("""
-            <div style="background:#0D1520;border:1px solid #1E3A4A;border-radius:16px;
-                 padding:1rem;overflow:hidden;">
-            """, unsafe_allow_html=True)
+    # ── ROW 2: Body Map full width
+    st.markdown("""
+    <p style="font-family:'Space Grotesk',sans-serif;font-size:.62rem;font-weight:600;
+       color:#4A6878;letter-spacing:.14em;text-transform:uppercase;margin-bottom:.9rem;">
+      ⬡ AI Body Map — Affected Regions
+    </p>""", unsafe_allow_html=True)
+
+    if body_map:
+        bmap_col, btag_col = st.columns([1.4, 1], gap="large")
+        with bmap_col:
+            st.markdown('<div style="background:#0D1520;border:1px solid #1E3A4A;border-radius:16px;padding:1rem;overflow:hidden;">', unsafe_allow_html=True)
             st.image(body_map, use_container_width=True, caption="")
             st.markdown("</div>", unsafe_allow_html=True)
-        else:
-            st.markdown("""
-            <div style="background:#0D1520;border:1px dashed #1E3A4A;border-radius:16px;
-                 padding:2.5rem;text-align:center;">
-              <p style="font-family:'Space Grotesk',sans-serif;font-size:.8rem;color:#2A4A5E;">
-                Body map unavailable
-              </p>
+        with btag_col:
+            sev_c   = {"mild":"#00C9A7","moderate":"#F59E0B","severe":"#A855F7"}.get(severity,"#F59E0B")
+            regions = result.get("affected_regions", [])
+            st.markdown(f"""
+            <div style="background:#0D1520;border:1px solid #1E3A4A;border-radius:16px;
+                 padding:1.5rem;height:100%;">
+              <p style="font-family:'Syne',sans-serif;font-size:.78rem;font-weight:700;
+                 color:#E8F0F7;margin-bottom:1rem;letter-spacing:-.01em;">Highlighted Regions</p>
+              <div style="display:flex;flex-wrap:wrap;gap:.5rem;">
+                {"".join([
+                    f'<span style="font-family:\'Space Grotesk\',sans-serif;font-size:.72rem;font-weight:600;'
+                    f'background:{sev_c}18;color:{sev_c};border:1px solid {sev_c}33;'
+                    f'border-radius:8px;padding:5px 12px;letter-spacing:.04em;">{r.upper()}</span>'
+                    for r in regions
+                ])}
+              </div>
+              <div style="margin-top:1.5rem;padding-top:1rem;border-top:1px solid #1E3A4A;">
+                <p style="font-family:'Space Grotesk',sans-serif;font-size:.7rem;color:#4A6878;
+                   line-height:1.6;">
+                  The body map above was generated by <strong style="color:#00C9A7;">Nano Banana 2</strong>
+                  based on the diagnosed condition. Highlighted regions indicate areas of clinical concern
+                  identified in the scan.
+                </p>
+              </div>
             </div>""", unsafe_allow_html=True)
-
-        sev_c   = {"mild":"#00C9A7","moderate":"#F59E0B","severe":"#A855F7"}.get(severity,"#F59E0B")
-        regions = result.get("affected_regions", [])
-        tags    = "".join([
-            f'<span style="font-family:\'Space Grotesk\',sans-serif;font-size:.6rem;font-weight:600;'
-            f'background:{sev_c}18;color:{sev_c};border:1px solid {sev_c}33;'
-            f'border-radius:6px;padding:3px 9px;letter-spacing:.06em;">{r.upper()}</span>'
-            for r in regions
-        ])
-        st.markdown(f'<div style="display:flex;flex-wrap:wrap;gap:.35rem;justify-content:center;margin-top:.8rem;">{tags}</div>', unsafe_allow_html=True)
-
-    # ── Exercises — AI Illustrated
-    with col_e:
+    else:
         st.markdown("""
-        <p style="font-family:'Space Grotesk',sans-serif;font-size:.62rem;font-weight:600;
-           color:#4A6878;letter-spacing:.14em;text-transform:uppercase;margin-bottom:.9rem;">
-          ⬡ AI-Illustrated Recovery Plan
-        </p>""", unsafe_allow_html=True)
+        <div style="background:#0D1520;border:1px dashed #1E3A4A;border-radius:16px;
+             padding:2.5rem;text-align:center;">
+          <p style="font-family:'Space Grotesk',sans-serif;font-size:.8rem;color:#2A4A5E;">
+            Body map unavailable
+          </p>
+        </div>""", unsafe_allow_html=True)
 
-        exercises = result.get("exercises", [])
-        if not exercises or not result.get("exercise_needed", True):
-            st.markdown("""
-            <div style="padding:1.2rem;background:#0D1520;border-radius:10px;
-                 font-family:'Space Grotesk',sans-serif;font-size:.85rem;color:#4A6878;
-                 border:1px solid #1E3A4A;line-height:1.6;">
-              No specific exercises recommended. Follow clinical recommendations above.
-            </div>""", unsafe_allow_html=True)
-        else:
-            palette    = ["#00C9A7","#0096B4","#A855F7","#F59E0B","#FF6B6B"]
-            diff_color = {"easy":"#00C9A7","moderate":"#F59E0B","hard":"#FF6B6B"}
+    # ── DIVIDER
+    st.markdown('<div style="height:1px;background:linear-gradient(90deg,#1E3A4A,#090E14);margin:2rem 0;"></div>', unsafe_allow_html=True)
 
-            for i, ex in enumerate(exercises[:4]):
-                color      = palette[i % len(palette)]
-                name       = ex.get("name","Exercise")
-                purpose    = ex.get("purpose","")
-                steps      = ex.get("steps",[])
-                duration   = ex.get("duration","")
-                reps       = ex.get("reps","")
-                difficulty = ex.get("difficulty","moderate")
-                dc         = diff_color.get(difficulty.lower(),"#F59E0B")
+    # ── ROW 3: Exercise plan full width
+    st.markdown("""
+    <p style="font-family:'Space Grotesk',sans-serif;font-size:.62rem;font-weight:600;
+       color:#4A6878;letter-spacing:.14em;text-transform:uppercase;margin-bottom:.9rem;">
+      ⬡ Veo-Generated Recovery Plan
+    </p>""", unsafe_allow_html=True)
 
-                meta = ""
-                if duration:
-                    meta += f'<span style="font-family:\'Space Grotesk\',sans-serif;font-size:.62rem;color:{color};background:{color}18;border-radius:5px;padding:2px 8px;margin-right:.3rem;">⏱ {duration}</span>'
-                if reps:
-                    meta += f'<span style="font-family:\'Space Grotesk\',sans-serif;font-size:.62rem;color:{color};background:{color}18;border-radius:5px;padding:2px 8px;margin-right:.3rem;">↺ {reps}</span>'
-                meta += f'<span style="font-family:\'Space Grotesk\',sans-serif;font-size:.62rem;color:{dc};background:{dc}18;border-radius:5px;padding:2px 8px;">{difficulty.upper()}</span>'
+    exercises = result.get("exercises", [])
+    if not exercises or not result.get("exercise_needed", True):
+        st.markdown("""
+        <div style="padding:1.2rem;background:#0D1520;border-radius:10px;
+             font-family:'Space Grotesk',sans-serif;font-size:.85rem;color:#4A6878;
+             border:1px solid #1E3A4A;line-height:1.6;">
+          No specific exercises recommended. Follow clinical recommendations above.
+        </div>""", unsafe_allow_html=True)
+    else:
+        palette    = ["#00C9A7","#0096B4","#A855F7","#F59E0B","#FF6B6B"]
+        diff_color = {"easy":"#00C9A7","moderate":"#F59E0B","hard":"#FF6B6B"}
 
-                steps_html = "".join([
-                    f'<div style="display:flex;gap:.5rem;margin-bottom:.35rem;align-items:flex-start;">'
-                    f'<span style="font-family:\'Syne\',sans-serif;font-size:.58rem;font-weight:800;'
-                    f'color:{color};background:{color}18;border-radius:4px;padding:2px 5px;flex-shrink:0;margin-top:1px;">{j+1}</span>'
-                    f'<span style="font-family:\'Space Grotesk\',sans-serif;font-size:.77rem;color:#6B8A9A;line-height:1.45;">{s}</span>'
-                    f'</div>'
-                    for j, s in enumerate(steps[:3])
-                ])
+        for i, ex in enumerate(exercises[:4]):
+            color      = palette[i % len(palette)]
+            name       = ex.get("name","Exercise")
+            purpose    = ex.get("purpose","")
+            steps      = ex.get("steps",[])
+            duration   = ex.get("duration","")
+            reps       = ex.get("reps","")
+            difficulty = ex.get("difficulty","moderate")
+            dc         = diff_color.get(difficulty.lower(),"#F59E0B")
 
-                st.markdown(f"""
-                <div style="background:#0D1520;border:1px solid #1E3A4A;border-radius:16px;
-                     padding:1.2rem;margin-bottom:1rem;position:relative;overflow:hidden;">
-                  <div style="position:absolute;top:0;left:0;width:3px;height:100%;
-                       background:linear-gradient(180deg,{color},{color}44);"></div>
-                  <p style="font-family:'Syne',sans-serif;font-size:.95rem;font-weight:700;
-                     color:#E8F0F7;margin-bottom:.3rem;padding-left:.2rem;">{name}</p>
-                  <p style="font-family:'Space Grotesk',sans-serif;font-size:.78rem;
-                     color:#4A6878;line-height:1.5;margin-bottom:.7rem;padding-left:.2rem;">{purpose}</p>
-                  <div style="margin-bottom:.7rem;padding-left:.2rem;">{meta}</div>
-                """, unsafe_allow_html=True)
+            meta = ""
+            if duration:
+                meta += f'<span style="font-family:\'Space Grotesk\',sans-serif;font-size:.68rem;color:{color};background:{color}18;border-radius:5px;padding:3px 10px;margin-right:.4rem;">⏱ {duration}</span>'
+            if reps:
+                meta += f'<span style="font-family:\'Space Grotesk\',sans-serif;font-size:.68rem;color:{color};background:{color}18;border-radius:5px;padding:3px 10px;margin-right:.4rem;">↺ {reps}</span>'
+            meta += f'<span style="font-family:\'Space Grotesk\',sans-serif;font-size:.68rem;color:{dc};background:{dc}18;border-radius:5px;padding:3px 10px;">{difficulty.upper()}</span>'
 
-                if i in ex_imgs and ex_imgs[i]:
-                    st.image(ex_imgs[i], use_container_width=True, caption="")
+            steps_html = "".join([
+                f'<div style="display:flex;gap:.6rem;margin-bottom:.45rem;align-items:flex-start;">'
+                f'<span style="font-family:\'Syne\',sans-serif;font-size:.62rem;font-weight:800;'
+                f'color:{color};background:{color}18;border-radius:4px;padding:2px 6px;flex-shrink:0;margin-top:1px;">{j+1}</span>'
+                f'<span style="font-family:\'Space Grotesk\',sans-serif;font-size:.85rem;color:#6B8A9A;line-height:1.5;">{s}</span>'
+                f'</div>'
+                for j, s in enumerate(steps[:3])
+            ])
+
+            # Exercise card: info left, video right
+            st.markdown(f"""
+            <div style="background:#0D1520;border:1px solid #1E3A4A;border-radius:20px;
+                 padding:1.8rem 2rem;margin-bottom:1.2rem;position:relative;overflow:hidden;">
+              <div style="position:absolute;top:0;left:0;width:4px;height:100%;
+                   background:linear-gradient(180deg,{color},{color}44);border-radius:4px 0 0 4px;"></div>
+              <div style="display:flex;gap:2rem;align-items:flex-start;flex-wrap:wrap;">
+                <div style="flex:1;min-width:260px;">
+                  <p style="font-family:'Syne',sans-serif;font-size:1.1rem;font-weight:800;
+                     color:#E8F0F7;margin-bottom:.4rem;padding-left:.3rem;">{name}</p>
+                  <p style="font-family:'Space Grotesk',sans-serif;font-size:.88rem;
+                     color:#4A6878;line-height:1.6;margin-bottom:.9rem;padding-left:.3rem;">{purpose}</p>
+                  <div style="margin-bottom:1rem;padding-left:.3rem;">{meta}</div>
+                  <div style="padding-left:.3rem;">{steps_html}</div>
+                </div>
+            """, unsafe_allow_html=True)
+
+            # Video on the right in a nested column
+            vid_col1, vid_col2 = st.columns([1, 1], gap="large")
+            with vid_col2:
+                if i in ex_videos and ex_videos[i]:
+                    st.video(ex_videos[i], format="video/mp4", autoplay=False)
                 else:
                     st.markdown(f"""
-                    <div style="background:#0A1018;border-radius:10px;height:70px;
-                         display:flex;align-items:center;justify-content:center;margin-bottom:.7rem;">
-                      <span style="font-family:'Space Grotesk',sans-serif;font-size:.7rem;color:#1E3A4A;">
-                        Illustration unavailable
+                    <div style="background:#0A1018;border-radius:12px;height:140px;
+                         display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.5rem;">
+                      <span style="font-size:1.5rem;opacity:.3;">🎬</span>
+                      <span style="font-family:'Space Grotesk',sans-serif;font-size:.72rem;color:#1E3A4A;">
+                        Video not yet generated
                       </span>
                     </div>""", unsafe_allow_html=True)
 
-                st.markdown(f'<div style="padding-left:.2rem;">{steps_html}</div></div>', unsafe_allow_html=True)
+            st.markdown("</div></div>", unsafe_allow_html=True)
+            if i < len(exercises[:4]) - 1:
+                st.markdown('<div style="height:.4rem;"></div>', unsafe_allow_html=True)
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -730,7 +789,7 @@ st.markdown("""
   </span>
   <span style="font-family:'Space Grotesk',sans-serif;font-size:.62rem;color:#1E3A4A;
      letter-spacing:.1em;text-transform:uppercase;">
-    Gemini Vision · Gemini 3 Pro Image · For Educational Use Only
+    Gemini Vision · Nano Banana 2 · Veo 3.1 · For Educational Use Only
   </span>
 </div>
 """, unsafe_allow_html=True)
