@@ -507,30 +507,23 @@ if analyze_btn:
                 )
                 st.session_state["body_map_img"] = img
 
-        # ── Step 3: Exercise videos via Veo 3.1 — all 4 in PARALLEL
+        # ── Step 3: Exercise videos via Veo 3.1 — sequential (API rate limit: 1 at a time)
         exercises = result.get("exercises", [])
         ex_videos = {}
         if exercises and result.get("exercise_needed", True):
-            import concurrent.futures
             exercise_list = exercises[:4]
             n = len(exercise_list)
-
-            def _gen_video(args):
-                idx, ex = args
-                ex_prompt = (
-                    ex.get("illustration_prompt",
-                           f"A person performing {ex.get('name','an exercise')} correctly.")
-                    + " Fitness demonstration video, clear body form, bright studio lighting, "
-                      "plain white background, slow and instructional pace, no text overlays."
-                )
-                return idx, generate_exercise_video(ex_prompt, GEMINI_API_KEY)
-
-            with st.spinner(f"Step 3 / 3 — Veo generating all {n} exercise videos in parallel… (may take ~2 min)"):
-                with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-                    futures = executor.map(_gen_video, enumerate(exercise_list))
-                    for idx, video_bytes in futures:
-                        if video_bytes:
-                            ex_videos[idx] = video_bytes
+            for i, ex in enumerate(exercise_list):
+                with st.spinner(f"Step 3 / 3 — Veo generating exercise video {i+1} of {n}… (may take ~60s each)"):
+                    ex_prompt = (
+                        ex.get("illustration_prompt",
+                               f"A person performing {ex.get('name','an exercise')} correctly.")
+                        + " Fitness demonstration video, clear body form, bright studio lighting, "
+                          "plain white background, slow and instructional pace, no text overlays."
+                    )
+                    video_bytes = generate_exercise_video(ex_prompt, GEMINI_API_KEY)
+                    if video_bytes:
+                        ex_videos[i] = video_bytes
 
         st.session_state["exercise_videos"] = ex_videos
         st.rerun()
