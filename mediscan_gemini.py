@@ -143,7 +143,7 @@ st.markdown("""
   <div style="display:flex; gap:.8rem; align-items:center;">
     <span class="ms-badge-gem">Gemini Vision · Diagnosis</span>
     <span class="ms-badge-gem">Nano Banana 2 · Body Map</span>
-    <span class="ms-badge-gem">Veo 3.1 · Exercise Videos</span>
+    <span class="ms-badge-gem">Veo2 · Exercise Videos</span>
     <span class="ms-badge-gem">v5.0</span>
   </div>
 </div>
@@ -188,8 +188,8 @@ st.markdown("""
   <h1 class="ms-h1">Diagnose. Visualize.<br><span class="italic accent">Rehabilitate.</span></h1>
   <p class="ms-body">
     Upload any X-ray, MRI, CT scan, or medical report. Gemini Vision diagnoses the condition,
-    Nano Banana 2 generates a real anatomical body map highlighting affected regions,
-    and Veo 3.1 generates an actual video demonstration of every exercise in your rehab plan.
+    Gemini generates a real anatomical body map highlighting affected regions,
+    and Veo2 via fal.ai generates a real video demonstration of every exercise in your rehab plan.
   </p>
   <div class="ms-pipeline">
     <div class="ms-pipe-step"><div class="num">1</div>Upload Scan</div>
@@ -413,65 +413,48 @@ IMPORTANT INSTRUCTIONS:
 
 
 def generate_image(prompt: str, api_key: str, style_suffix: str = "") -> Image.Image | None:
-    """Nano Banana 2 — generate body map image."""
-    import traceback
+    """Generate body map using gemini-2.0-flash-exp (free tier, supports image output)."""
     try:
-        print(f"[BODYMAP] Starting image generation. Prompt: {prompt[:80]}...")
         client = get_client(api_key)
         full_prompt = prompt + (style_suffix or "")
         response = client.models.generate_content(
-            model="gemini-3.1-flash-image-preview",
+            model="gemini-2.0-flash-exp",
             contents=[full_prompt],
+            config=types.GenerateContentConfig(
+                response_modalities=["TEXT", "IMAGE"]
+            ),
         )
-        print(f"[BODYMAP] Response received. Candidates: {len(response.candidates)}")
-        for i, part in enumerate(response.candidates[0].content.parts):
-            print(f"[BODYMAP] Part {i}: type={type(part)}, has inline_data={part.inline_data is not None}")
+        for part in response.candidates[0].content.parts:
             if part.inline_data is not None:
-                print(f"[BODYMAP] Image data found, mime={part.inline_data.mime_type}, size={len(part.inline_data.data)}")
                 return Image.open(io.BytesIO(part.inline_data.data))
         print("[BODYMAP] No image part found in response.")
     except Exception as e:
         print(f"[BODYMAP] EXCEPTION: {e}")
-        print(traceback.format_exc())
         st.warning(f"Body map generation failed: {e}")
     return None
 
 
-def generate_exercise_video(prompt: str, api_key: str) -> bytes | None:
-    """Veo 3.1 — generate an exercise demonstration video. Returns raw MP4 bytes."""
-    import time
-    import traceback
+def generate_exercise_video_fal(prompt: str, fal_api_key: str) -> str | None:
+    """Generate exercise video using Veo2 via fal.ai. Returns video URL."""
+    import fal_client, os
     try:
-        print(f"[VEO] Starting video generation. Prompt: {prompt[:80]}...")
-        client = get_client(api_key)
-        operation = client.models.generate_videos(
-            model="veo-3.1-generate-preview",
-            prompt=prompt,
+        os.environ["FAL_KEY"] = fal_api_key
+        print(f"[FAL-VEO2] Submitting: {prompt[:80]}...")
+        result = fal_client.subscribe(
+            "fal-ai/veo2",
+            arguments={
+                "prompt": prompt,
+                "duration": "5s",
+                "aspect_ratio": "16:9",
+            },
         )
-        print(f"[VEO] Operation started: {operation}")
-        # Poll until done (Veo is async, typically 30-90s)
-        max_attempts = 36  # max ~6 min
-        for attempt in range(max_attempts):
-            time.sleep(10)
-            operation = client.operations.get(operation)
-            print(f"[VEO] Poll attempt {attempt+1}: done={operation.done}")
-            if operation.done:
-                break
-
-        print(f"[VEO] Final state: done={operation.done}, response={operation.response}")
-        if operation.done and operation.response and operation.response.generated_videos:
-            video = operation.response.generated_videos[0]
-            print(f"[VEO] Got video object: {video}")
-            client.files.download(file=video.video)
-            print(f"[VEO] Download complete, bytes length: {len(video.video.video_bytes) if video.video.video_bytes else 0}")
-            return video.video.video_bytes
-        else:
-            print(f"[VEO] No video returned. done={operation.done}, response={operation.response}")
+        video_url = result.get("video", {}).get("url")
+        print(f"[FAL-VEO2] Got URL: {video_url}")
+        return video_url
     except Exception as e:
-        print(f"[VEO] EXCEPTION: {e}")
-        print(traceback.format_exc())
-        st.warning(f"Exercise video generation failed: {e}")
-    return None
+        print(f"[FAL-VEO2] EXCEPTION: {e}")
+        st.warning(f"Video generation failed: {e}")
+        return None
 
 
 # ─────────────────────────────────────────────────────────────
@@ -526,23 +509,26 @@ if analyze_btn:
                 )
                 st.session_state["body_map_img"] = img
 
-        # ── Step 3: Exercise videos via Veo 3.1 — sequential (API rate limit: 1 at a time)
+        # ── Step 3: Exercise videos via Veo2 on fal.ai
+        FAL_API_KEY = st.secrets.get("FAL_API_KEY", "")
         exercises = result.get("exercises", [])
         ex_videos = {}
-        if exercises and result.get("exercise_needed", True):
+        if not FAL_API_KEY:
+            print("[FAL] FAL_API_KEY not set in secrets, skipping video generation.")
+        elif exercises and result.get("exercise_needed", True):
             exercise_list = exercises[:4]
             n = len(exercise_list)
             for i, ex in enumerate(exercise_list):
-                with st.spinner(f"Step 3 / 3 — Veo generating exercise video {i+1} of {n}… (may take ~60s each)"):
+                with st.spinner(f"Step 3 / 3 — Veo2 generating exercise video {i+1} of {n}…"):
                     ex_prompt = (
                         ex.get("illustration_prompt",
                                f"A person performing {ex.get('name','an exercise')} correctly.")
                         + " Fitness demonstration video, clear body form, bright studio lighting, "
                           "plain white background, slow and instructional pace, no text overlays."
                     )
-                    video_bytes = generate_exercise_video(ex_prompt, GEMINI_API_KEY)
-                    if video_bytes:
-                        ex_videos[i] = video_bytes
+                    video_url = generate_exercise_video_fal(ex_prompt, FAL_API_KEY)
+                    if video_url:
+                        ex_videos[i] = video_url
 
         st.session_state["exercise_videos"] = ex_videos
         st.rerun()
@@ -691,7 +677,7 @@ if result:
               <div style="margin-top:1.5rem;padding-top:1rem;border-top:1px solid #1E3A4A;">
                 <p style="font-family:'Space Grotesk',sans-serif;font-size:.7rem;color:#4A6878;
                    line-height:1.6;">
-                  The body map above was generated by <strong style="color:#00C9A7;">Nano Banana 2</strong>
+                  The body map above was generated by <strong style="color:#00C9A7;">Gemini 2.0 Flash</strong>
                   based on the diagnosed condition. Highlighted regions indicate areas of clinical concern
                   identified in the scan.
                 </p>
@@ -782,7 +768,7 @@ if result:
                          display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.5rem;">
                       <span style="font-size:1.5rem;opacity:.3;">🎬</span>
                       <span style="font-family:'Space Grotesk',sans-serif;font-size:.72rem;color:#1E3A4A;">
-                        Video not yet generated
+                        Video not generated
                       </span>
                     </div>""", unsafe_allow_html=True)
 
@@ -823,7 +809,7 @@ st.markdown("""
   </span>
   <span style="font-family:'Space Grotesk',sans-serif;font-size:.62rem;color:#1E3A4A;
      letter-spacing:.1em;text-transform:uppercase;">
-    Gemini Vision · Nano Banana 2 · Veo 3.1 · For Educational Use Only
+    Gemini Vision · Gemini Image · Veo2 Exercise Videos · For Educational Use Only
   </span>
 </div>
 """, unsafe_allow_html=True)
