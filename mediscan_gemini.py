@@ -413,12 +413,12 @@ IMPORTANT INSTRUCTIONS:
 
 
 def generate_image(prompt: str, api_key: str, style_suffix: str = "") -> Image.Image | None:
-    """Generate body map using gemini-2.0-flash-exp (free tier, supports image output)."""
+    """Generate body map using gemini-2.5-flash-image (free tier, 500 req/day)."""
     try:
         client = get_client(api_key)
         full_prompt = prompt + (style_suffix or "")
         response = client.models.generate_content(
-            model="gemini-2.0-flash-exp",
+            model="gemini-2.5-flash-image",
             contents=[full_prompt],
             config=types.GenerateContentConfig(
                 response_modalities=["TEXT", "IMAGE"]
@@ -447,12 +447,24 @@ def generate_exercise_video_fal(prompt: str, fal_api_key: str) -> str | None:
                 "duration": "5s",
                 "aspect_ratio": "16:9",
             },
+            with_logs=True,
         )
-        video_url = result.get("video", {}).get("url")
+        print(f"[FAL-VEO2] Raw result type: {type(result)}, value: {str(result)[:200]}")
+        # Handle both dict and object result types
+        if isinstance(result, dict):
+            video_url = result.get("video", {}).get("url")
+        else:
+            video_url = getattr(getattr(result, "video", None), "url", None)
+            if not video_url and hasattr(result, "__getitem__"):
+                try:
+                    video_url = result["video"]["url"]
+                except Exception:
+                    pass
         print(f"[FAL-VEO2] Got URL: {video_url}")
         return video_url
     except Exception as e:
         print(f"[FAL-VEO2] EXCEPTION: {e}")
+        import traceback; print(traceback.format_exc())
         st.warning(f"Video generation failed: {e}")
         return None
 
