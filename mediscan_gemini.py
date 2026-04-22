@@ -386,7 +386,7 @@ Make body_map_prompt and illustration_prompts vivid and specific to the actual c
 {f'Patient context: {context}' if context else ''}"""
 
     response = client.models.generate_content(
-        model="gemini-1.5-flash",
+        model="gemini-2.0-flash",
         contents=[
             types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"),
             prompt
