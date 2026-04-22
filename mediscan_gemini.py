@@ -413,12 +413,12 @@ IMPORTANT INSTRUCTIONS:
 
 
 def generate_image(prompt: str, api_key: str, style_suffix: str = "") -> Image.Image | None:
-    """Generate body map using gemini-2.5-flash-image (free tier, 500 req/day)."""
+    """Generate body map using gemini-2.5-flash-image."""
     try:
         client = get_client(api_key)
         full_prompt = prompt + (style_suffix or "")
         response = client.models.generate_content(
-            model="gemini-3.1-flash-image-preview",
+            model="gemini-2.5-flash-image",
             contents=[full_prompt],
             config=types.GenerateContentConfig(
                 response_modalities=["TEXT", "IMAGE"]
@@ -440,7 +440,7 @@ def generate_exercise_video(prompt: str, api_key: str) -> bytes | None:
     try:
         client = get_client(api_key)
         operation = client.models.generate_videos(
-            model="veo-3.1-generate-preview",
+            model="veo-3.1-lite-generate-preview",
             prompt=prompt,
         )
         for _ in range(36):
@@ -456,7 +456,6 @@ def generate_exercise_video(prompt: str, api_key: str) -> bytes | None:
         print(f"[VEO] EXCEPTION: {e}")
         st.warning(f"Video generation failed: {e}")
     return None
-        return None
 
 
 # ─────────────────────────────────────────────────────────────
