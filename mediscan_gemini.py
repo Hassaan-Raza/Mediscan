@@ -386,7 +386,7 @@ Make body_map_prompt and illustration_prompts vivid and specific to the actual c
 {f'Patient context: {context}' if context else ''}"""
 
     response = client.models.generate_content(
-        model="gemini-3-flash",
+        model="gemini-2.5-flash",
         contents=[
             types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"),
             prompt
@@ -405,7 +405,7 @@ def generate_image(prompt: str, api_key: str, style_suffix: str = "") -> Image.I
         client = get_client(api_key)
         full_prompt = prompt + (style_suffix or "")
         response = client.models.generate_content(
-            model="gemini-3.1-flash-image",
+            model="gemini-3.1-flash-image-preview",
             contents=[full_prompt],
         )
         for part in response.candidates[0].content.parts:
