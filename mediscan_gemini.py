@@ -414,17 +414,25 @@ IMPORTANT INSTRUCTIONS:
 
 def generate_image(prompt: str, api_key: str, style_suffix: str = "") -> Image.Image | None:
     """Nano Banana 2 — generate body map image."""
+    import traceback
     try:
+        print(f"[BODYMAP] Starting image generation. Prompt: {prompt[:80]}...")
         client = get_client(api_key)
         full_prompt = prompt + (style_suffix or "")
         response = client.models.generate_content(
             model="gemini-3.1-flash-image-preview",
             contents=[full_prompt],
         )
-        for part in response.candidates[0].content.parts:
+        print(f"[BODYMAP] Response received. Candidates: {len(response.candidates)}")
+        for i, part in enumerate(response.candidates[0].content.parts):
+            print(f"[BODYMAP] Part {i}: type={type(part)}, has inline_data={part.inline_data is not None}")
             if part.inline_data is not None:
+                print(f"[BODYMAP] Image data found, mime={part.inline_data.mime_type}, size={len(part.inline_data.data)}")
                 return Image.open(io.BytesIO(part.inline_data.data))
+        print("[BODYMAP] No image part found in response.")
     except Exception as e:
+        print(f"[BODYMAP] EXCEPTION: {e}")
+        print(traceback.format_exc())
         st.warning(f"Body map generation failed: {e}")
     return None
 
@@ -432,25 +440,36 @@ def generate_image(prompt: str, api_key: str, style_suffix: str = "") -> Image.I
 def generate_exercise_video(prompt: str, api_key: str) -> bytes | None:
     """Veo 3.1 — generate an exercise demonstration video. Returns raw MP4 bytes."""
     import time
+    import traceback
     try:
+        print(f"[VEO] Starting video generation. Prompt: {prompt[:80]}...")
         client = get_client(api_key)
         operation = client.models.generate_videos(
             model="veo-3.1-generate-preview",
             prompt=prompt,
         )
+        print(f"[VEO] Operation started: {operation}")
         # Poll until done (Veo is async, typically 30-90s)
         max_attempts = 36  # max ~6 min
-        for _ in range(max_attempts):
+        for attempt in range(max_attempts):
             time.sleep(10)
             operation = client.operations.get(operation)
+            print(f"[VEO] Poll attempt {attempt+1}: done={operation.done}")
             if operation.done:
                 break
 
+        print(f"[VEO] Final state: done={operation.done}, response={operation.response}")
         if operation.done and operation.response and operation.response.generated_videos:
             video = operation.response.generated_videos[0]
+            print(f"[VEO] Got video object: {video}")
             client.files.download(file=video.video)
+            print(f"[VEO] Download complete, bytes length: {len(video.video.video_bytes) if video.video.video_bytes else 0}")
             return video.video.video_bytes
+        else:
+            print(f"[VEO] No video returned. done={operation.done}, response={operation.response}")
     except Exception as e:
+        print(f"[VEO] EXCEPTION: {e}")
+        print(traceback.format_exc())
         st.warning(f"Exercise video generation failed: {e}")
     return None
 
