@@ -349,49 +349,61 @@ def get_client(api_key: str):
     return genai.Client(api_key=api_key)
 
 
-def analyze_with_gemini(img_bytes: bytes, api_key: str, context: str = "") -> dict:
-    """Gemini 1.5 Flash — vision analysis → structured JSON diagnosis."""
+def analyze_with_gemini(img_bytes: bytes, api_key: str, context: str = "", is_pdf: bool = False) -> dict:
+    """Gemini 2.5 Flash — vision/text analysis → structured JSON diagnosis."""
     client = get_client(api_key)
 
-    prompt = f"""You are a senior radiologist and clinical AI. Analyze this medical image carefully.
+    prompt = f"""You are a senior radiologist and clinical AI. Analyze this medical {"report" if is_pdf else "image"} carefully and thoroughly.
 
 Respond ONLY with a raw JSON object — no markdown, no code fences, no extra text.
 
 {{
   "image_type": "X-ray | MRI | CT | Ultrasound | Report | Photo | Other",
-  "diagnosis": "Primary diagnosis in clear plain language (1-2 sentences)",
+  "diagnosis": "Primary diagnosis in clear plain language (2-3 sentences, covering ALL key findings)",
   "confidence": "high | medium | low",
   "severity": "mild | moderate | severe",
-  "affected_regions": ["specific body regions affected"],
-  "findings": ["finding 1", "finding 2", "finding 3", "finding 4"],
-  "recommendations": ["rec 1", "rec 2", "rec 3"],
-  "body_map_prompt": "Detailed prompt for Gemini image generation: a front-view full human body medical anatomical illustration on white background, with [SPECIFIC REGION] highlighted in glowing red/orange with arrows and labels. Professional medical illustration style, clean, precise anatomy.",
+  "affected_regions": ["every specific body region affected, be detailed"],
+  "findings": ["finding 1", "finding 2", "finding 3", "finding 4", "finding 5"],
+  "recommendations": ["rec 1", "rec 2", "rec 3", "rec 4"],
+  "body_map_prompt": "Detailed prompt for Gemini image generation: a front-view and side-view full human body medical anatomical illustration on white background, with [SPECIFIC REGIONS matching the actual diagnosis] highlighted in glowing red/orange with arrows and labels. Professional medical illustration style, clean, precise anatomy.",
   "exercise_needed": true,
   "exercises": [
     {{
       "name": "Exercise name",
-      "purpose": "Why this helps",
+      "purpose": "Why this specific exercise helps this specific condition",
       "difficulty": "easy | moderate | hard",
-      "duration": "e.g. 10 minutes",
+      "duration": "e.g. 10-15 minutes",
       "reps": "e.g. 3 sets of 10",
       "steps": ["Step 1", "Step 2", "Step 3"],
-      "illustration_prompt": "Instructional fitness illustration of a person performing [exercise] showing correct body position and form. Clean white background, flat design style, like a physical therapy guide. No text in image."
+      "illustration_prompt": "A person performing [specific exercise name] correctly. Show precise body position, posture cues, and movement direction. Clean white background, instructional style, bright studio lighting. No text overlays."
     }}
   ],
   "urgency": "routine | urgent | emergency",
   "disclaimer": "Always consult a qualified physician before acting on any AI-generated medical analysis."
 }}
 
-Give 3-4 exercises if exercise_needed is true, else empty array.
-Make body_map_prompt and illustration_prompts vivid and specific to the actual condition.
+IMPORTANT INSTRUCTIONS:
+- If this is an MRI brain report, identify ALL findings: tissue loss, infarcts, white matter changes, ventricular changes, degeneration patterns.
+- Give exactly 4 exercises tailored to the SPECIFIC diagnosed condition (e.g. post-stroke, brain injury → cognitive + balance + coordination exercises).
+- Each exercise's illustration_prompt must be specific and vivid enough to generate a clear instructional video.
+- body_map_prompt must highlight the EXACT regions mentioned in the report (e.g. right temporal lobe, right occipital region, right lateral ventricle, cerebral peduncle for a right hemisphere stroke report).
 {f'Patient context: {context}' if context else ''}"""
 
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=[
+    if is_pdf:
+        # Send PDF as a document part so Gemini reads the actual text
+        contents = [
+            types.Part.from_bytes(data=img_bytes, mime_type="application/pdf"),
+            prompt
+        ]
+    else:
+        contents = [
             types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"),
             prompt
         ]
+
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=contents
     )
     raw = response.text.strip()
     raw = re.sub(r"^```json\s*", "", raw)
@@ -427,13 +439,14 @@ def generate_exercise_video(prompt: str, api_key: str) -> bytes | None:
             prompt=prompt,
         )
         # Poll until done (Veo is async, typically 30-90s)
-        for _ in range(30):  # max ~5 min
-            if operation.done:
-                break
+        max_attempts = 36  # max ~6 min
+        for _ in range(max_attempts):
             time.sleep(10)
             operation = client.operations.get(operation)
+            if operation.done:
+                break
 
-        if operation.done and operation.response.generated_videos:
+        if operation.done and operation.response and operation.response.generated_videos:
             video = operation.response.generated_videos[0]
             client.files.download(file=video.video)
             return video.video.video_bytes
@@ -458,14 +471,9 @@ if analyze_btn:
         raw_bytes = uploaded_file.read()
         is_pdf    = uploaded_file.name.lower().endswith(".pdf")
 
-        # ── Convert PDF → JPEG if needed
+        # ── For images: convert to standardized JPEG; PDFs are passed as-is
         if is_pdf:
-            with st.spinner("Converting PDF to image…"):
-                try:
-                    img_bytes = pdf_to_image(raw_bytes)
-                except Exception as e:
-                    st.error(f"PDF conversion failed: {e}. Make sure PyMuPDF is installed.")
-                    st.stop()
+            img_bytes = raw_bytes  # unused for analysis, kept for consistency
         else:
             pil_raw = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
             buf     = io.BytesIO()
@@ -475,7 +483,12 @@ if analyze_btn:
         # ── Step 1: Diagnosis via Gemini Vision
         with st.spinner("Step 1 / 3 — Gemini Vision analyzing your scan…"):
             try:
-                result = analyze_with_gemini(img_bytes, GEMINI_API_KEY, context_text)
+                result = analyze_with_gemini(
+                    raw_bytes if is_pdf else img_bytes,
+                    GEMINI_API_KEY,
+                    context_text,
+                    is_pdf=is_pdf
+                )
                 st.session_state["result"]         = result
                 st.session_state["body_map_img"]   = None
                 st.session_state["exercise_videos"]= {}
@@ -483,8 +496,8 @@ if analyze_btn:
                 st.error(f"Diagnosis failed: {e}")
                 st.stop()
 
-        # ── Step 2: Body map via Gemini 3 Pro Image
-        with st.spinner("Step 2 / 3 — Gemini 3 Pro Image generating body map…"):
+        # ── Step 2: Body map via Gemini Image
+        with st.spinner("Step 2 / 3 — Generating anatomical body map…"):
             body_prompt = result.get("body_map_prompt", "")
             if body_prompt:
                 img = generate_image(
@@ -494,22 +507,31 @@ if analyze_btn:
                 )
                 st.session_state["body_map_img"] = img
 
-        # ── Step 3: Exercise videos via Veo 3.1
+        # ── Step 3: Exercise videos via Veo 3.1 — all 4 in PARALLEL
         exercises = result.get("exercises", [])
         ex_videos = {}
         if exercises and result.get("exercise_needed", True):
-            n = len(exercises[:4])
-            for i, ex in enumerate(exercises[:4]):
-                with st.spinner(f"Step 3 / 3 — Veo generating exercise video {i+1} of {n}… (may take ~60s)"):
-                    ex_prompt = (
-                        ex.get("illustration_prompt",
-                               f"A person performing {ex.get('name','an exercise')} correctly.")
-                        + " Fitness demonstration video, clear body form, bright studio lighting, "
-                          "plain white background, slow and instructional pace, no text overlays."
-                    )
-                    video_bytes = generate_exercise_video(ex_prompt, GEMINI_API_KEY)
-                    if video_bytes:
-                        ex_videos[i] = video_bytes
+            import concurrent.futures
+            exercise_list = exercises[:4]
+            n = len(exercise_list)
+
+            def _gen_video(args):
+                idx, ex = args
+                ex_prompt = (
+                    ex.get("illustration_prompt",
+                           f"A person performing {ex.get('name','an exercise')} correctly.")
+                    + " Fitness demonstration video, clear body form, bright studio lighting, "
+                      "plain white background, slow and instructional pace, no text overlays."
+                )
+                return idx, generate_exercise_video(ex_prompt, GEMINI_API_KEY)
+
+            with st.spinner(f"Step 3 / 3 — Veo generating all {n} exercise videos in parallel… (may take ~2 min)"):
+                with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                    futures = executor.map(_gen_video, enumerate(exercise_list))
+                    for idx, video_bytes in futures:
+                        if video_bytes:
+                            ex_videos[idx] = video_bytes
+
         st.session_state["exercise_videos"] = ex_videos
         st.rerun()
 
