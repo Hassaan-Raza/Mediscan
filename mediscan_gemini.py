@@ -196,60 +196,78 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+st.markdown('<div style="height:1px;background:linear-gradient(90deg,#1E3A4A,#090E14);margin:0 3rem 2rem;"></div>', unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────
-# API KEY INPUT
+# API KEY — loaded from Streamlit secrets (never hardcoded)
+# In your Streamlit Cloud dashboard go to:
+#   App settings → Secrets → add:
+#   GEMINI_API_KEY = "AIza..."
+# For local dev create .streamlit/secrets.toml with the same key.
 # ─────────────────────────────────────────────────────────────
-st.markdown("""
-<div style="height:1px;background:linear-gradient(90deg,#1E3A4A,#090E14);margin:0 3rem 2rem;"></div>
-<div style="padding:0 3rem 1.5rem;">
-""", unsafe_allow_html=True)
-
-col_key, _ = st.columns([2, 3])
-with col_key:
+try:
+    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+except KeyError:
     st.markdown("""
-    <p style="font-family:'Space Grotesk',sans-serif;font-size:.68rem;font-weight:600;
-       color:#4A6878;letter-spacing:.12em;text-transform:uppercase;margin-bottom:.4rem;">
-      Google Gemini API Key
-    </p>""", unsafe_allow_html=True)
-    api_key_input = st.text_input(
-        "gemini_key", type="password",
-        placeholder="AIza...",
-        label_visibility="collapsed",
-        value=st.session_state.get("gemini_key", ""),
-        key="gemini_key_field"
-    )
-    if api_key_input:
-        st.session_state["gemini_key"] = api_key_input
-
-st.markdown("</div>", unsafe_allow_html=True)
+    <div style="margin:1rem 3rem;background:#1A1508;border:1px solid #FF6B6B55;
+         border-radius:10px;padding:1rem 1.4rem;
+         font-family:'Space Grotesk',sans-serif;font-size:.88rem;color:#FF6B6B;line-height:1.7;">
+      <strong>⚠ API key not found.</strong><br>
+      Add <code style="background:#FF6B6B18;padding:1px 5px;border-radius:4px;">GEMINI_API_KEY = "AIza..."</code>
+      to your Streamlit secrets.<br>
+      <span style="color:#4A6878;font-size:.8rem;">
+        Streamlit Cloud: App settings → Secrets &nbsp;|&nbsp;
+        Local: <code style="background:#1E3A4A;padding:1px 5px;border-radius:4px;">.streamlit/secrets.toml</code>
+      </span>
+    </div>""", unsafe_allow_html=True)
+    st.stop()
 
 
 # ─────────────────────────────────────────────────────────────
 # UPLOAD + CONTEXT
 # ─────────────────────────────────────────────────────────────
 st.markdown("""
-<div style="padding:0 3rem 0.5rem;">
+<style>
+/* Hide the file uploader label text (we use our own heading) */
+[data-testid="stFileUploaderDropzoneInstructions"] div span { display: none; }
+[data-testid="stFileUploaderDropzoneInstructions"]::before {
+  content: "Drop scan here or click to browse";
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: .85rem;
+  color: #4A6878;
+}
+/* Fix column padding */
+[data-testid="stFileUploader"] { width: 100%; }
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown("""
+<div style="padding:0 3rem 1.2rem;">
   <p style="font-family:'Syne',sans-serif;font-size:1.2rem;font-weight:700;
-     color:#E8F0F7;margin-bottom:1.2rem;letter-spacing:-.02em;">Upload Medical Scan</p>
+     color:#E8F0F7;letter-spacing:-.02em;">Upload Medical Scan</p>
 </div>
 """, unsafe_allow_html=True)
 
-up_col, ctx_col = st.columns([1, 1], gap="large")
+col_left, col_right = st.columns([1, 1], gap="large")
 
-with up_col:
+with col_left:
     st.markdown('<div style="padding:0 0 0 3rem;">', unsafe_allow_html=True)
     uploaded_file = st.file_uploader(
-        "Drop X-ray, MRI, CT or report image here",
+        "Scan upload",
         type=["png", "jpg", "jpeg", "webp"],
-        label_visibility="visible",
+        label_visibility="collapsed",
         key="uploader"
     )
     if uploaded_file:
+        st.markdown("""
+        <div style="background:#0D1520;border:1px solid #1E3A4A;border-radius:12px;
+             padding:.8rem;margin-top:.5rem;overflow:hidden;">
+        """, unsafe_allow_html=True)
         st.image(uploaded_file, caption="", use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-with ctx_col:
+with col_right:
     st.markdown('<div style="padding:0 3rem 0 0;">', unsafe_allow_html=True)
     st.markdown("""
     <p style="font-family:'Space Grotesk',sans-serif;font-size:.68rem;font-weight:600;
@@ -352,14 +370,7 @@ def generate_image(prompt: str, api_key: str, style_suffix: str = "") -> Image.I
 # ─────────────────────────────────────────────────────────────
 
 if analyze_btn:
-    if not st.session_state.get("gemini_key"):
-        st.markdown("""
-        <div style="margin:1rem 3rem;background:#1A1508;border:1px solid #F59E0B55;
-             border-radius:10px;padding:.9rem 1.2rem;
-             font-family:'Space Grotesk',sans-serif;font-size:.88rem;color:#F59E0B;">
-          ⚠️  Please enter your Google Gemini API key above.
-        </div>""", unsafe_allow_html=True)
-    elif not uploaded_file:
+    if not uploaded_file:
         st.markdown("""
         <div style="margin:1rem 3rem;background:#1A1508;border:1px solid #F59E0B55;
              border-radius:10px;padding:.9rem 1.2rem;
@@ -377,7 +388,7 @@ if analyze_btn:
         # ── Step 1: Diagnosis via Gemini Vision
         with st.spinner("Step 1 / 3 — Gemini Vision analyzing your scan…"):
             try:
-                result = analyze_with_gemini(img_bytes, st.session_state["gemini_key"], context_text)
+                result = analyze_with_gemini(img_bytes, GEMINI_API_KEY, context_text)
                 st.session_state["result"]       = result
                 st.session_state["body_map_img"] = None
                 st.session_state["exercise_imgs"]= {}
@@ -391,7 +402,7 @@ if analyze_btn:
             if body_prompt:
                 img = generate_image(
                     body_prompt,
-                    st.session_state["gemini_key"],
+                    GEMINI_API_KEY,
                     " Medical illustration, white background, anatomical precision, professional."
                 )
                 st.session_state["body_map_img"] = img
@@ -409,7 +420,7 @@ if analyze_btn:
                     )
                     img = generate_image(
                         ex_prompt,
-                        st.session_state["gemini_key"],
+                        GEMINI_API_KEY,
                         " Clean white background, flat instructional illustration, physical therapy style."
                     )
                     if img:
