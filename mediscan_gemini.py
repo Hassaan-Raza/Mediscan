@@ -143,7 +143,7 @@ st.markdown("""
   <div style="display:flex; gap:.8rem; align-items:center;">
     <span class="ms-badge-gem">Gemini Vision · Diagnosis</span>
     <span class="ms-badge-gem">Nano Banana 2 · Body Map</span>
-    <span class="ms-badge-gem">Veo2 · Exercise Videos</span>
+    <span class="ms-badge-gem">Veo 3.1 · Exercise Videos</span>
     <span class="ms-badge-gem">v5.0</span>
   </div>
 </div>
@@ -189,7 +189,7 @@ st.markdown("""
   <p class="ms-body">
     Upload any X-ray, MRI, CT scan, or medical report. Gemini Vision diagnoses the condition,
     Gemini generates a real anatomical body map highlighting affected regions,
-    and Veo2 via fal.ai generates a real video demonstration of every exercise in your rehab plan.
+    and Veo 3.1 generates an actual video demonstration of every exercise in your rehab plan.
   </p>
   <div class="ms-pipeline">
     <div class="ms-pipe-step"><div class="num">1</div>Upload Scan</div>
@@ -418,7 +418,7 @@ def generate_image(prompt: str, api_key: str, style_suffix: str = "") -> Image.I
         client = get_client(api_key)
         full_prompt = prompt + (style_suffix or "")
         response = client.models.generate_content(
-            model="gemini-2.5-flash-image",
+            model="gemini-3.1-flash-image-preview",
             contents=[full_prompt],
             config=types.GenerateContentConfig(
                 response_modalities=["TEXT", "IMAGE"]
@@ -434,38 +434,28 @@ def generate_image(prompt: str, api_key: str, style_suffix: str = "") -> Image.I
     return None
 
 
-def generate_exercise_video_fal(prompt: str, fal_api_key: str) -> str | None:
-    """Generate exercise video using Veo2 via fal.ai. Returns video URL."""
-    import fal_client, os
+def generate_exercise_video(prompt: str, api_key: str) -> bytes | None:
+    """Veo — generate an exercise demonstration video via Google API."""
+    import time
     try:
-        os.environ["FAL_KEY"] = fal_api_key
-        print(f"[FAL-VEO2] Submitting: {prompt[:80]}...")
-        result = fal_client.subscribe(
-            "fal-ai/veo2",
-            arguments={
-                "prompt": prompt,
-                "duration": "5s",
-                "aspect_ratio": "16:9",
-            },
-            with_logs=True,
+        client = get_client(api_key)
+        operation = client.models.generate_videos(
+            model="veo-3.1-generate-preview",
+            prompt=prompt,
         )
-        print(f"[FAL-VEO2] Raw result type: {type(result)}, value: {str(result)[:200]}")
-        # Handle both dict and object result types
-        if isinstance(result, dict):
-            video_url = result.get("video", {}).get("url")
-        else:
-            video_url = getattr(getattr(result, "video", None), "url", None)
-            if not video_url and hasattr(result, "__getitem__"):
-                try:
-                    video_url = result["video"]["url"]
-                except Exception:
-                    pass
-        print(f"[FAL-VEO2] Got URL: {video_url}")
-        return video_url
+        for _ in range(36):
+            time.sleep(10)
+            operation = client.operations.get(operation)
+            if operation.done:
+                break
+        if operation.done and operation.response and operation.response.generated_videos:
+            video = operation.response.generated_videos[0]
+            client.files.download(file=video.video)
+            return video.video.video_bytes
     except Exception as e:
-        print(f"[FAL-VEO2] EXCEPTION: {e}")
-        import traceback; print(traceback.format_exc())
+        print(f"[VEO] EXCEPTION: {e}")
         st.warning(f"Video generation failed: {e}")
+    return None
         return None
 
 
@@ -521,26 +511,23 @@ if analyze_btn:
                 )
                 st.session_state["body_map_img"] = img
 
-        # ── Step 3: Exercise videos via Veo2 on fal.ai
-        FAL_API_KEY = st.secrets.get("FAL_API_KEY", "")
+        # ── Step 3: Exercise videos via Veo (Google API)
         exercises = result.get("exercises", [])
         ex_videos = {}
-        if not FAL_API_KEY:
-            print("[FAL] FAL_API_KEY not set in secrets, skipping video generation.")
-        elif exercises and result.get("exercise_needed", True):
+        if exercises and result.get("exercise_needed", True):
             exercise_list = exercises[:4]
             n = len(exercise_list)
             for i, ex in enumerate(exercise_list):
-                with st.spinner(f"Step 3 / 3 — Veo2 generating exercise video {i+1} of {n}…"):
+                with st.spinner(f"Step 3 / 3 — Veo generating exercise video {i+1} of {n}… (may take ~60s)"):
                     ex_prompt = (
                         ex.get("illustration_prompt",
                                f"A person performing {ex.get('name','an exercise')} correctly.")
                         + " Fitness demonstration video, clear body form, bright studio lighting, "
                           "plain white background, slow and instructional pace, no text overlays."
                     )
-                    video_url = generate_exercise_video_fal(ex_prompt, FAL_API_KEY)
-                    if video_url:
-                        ex_videos[i] = video_url
+                    video_bytes = generate_exercise_video(ex_prompt, GEMINI_API_KEY)
+                    if video_bytes:
+                        ex_videos[i] = video_bytes
 
         st.session_state["exercise_videos"] = ex_videos
         st.rerun()
@@ -821,7 +808,7 @@ st.markdown("""
   </span>
   <span style="font-family:'Space Grotesk',sans-serif;font-size:.62rem;color:#1E3A4A;
      letter-spacing:.1em;text-transform:uppercase;">
-    Gemini Vision · Gemini Image · Veo2 Exercise Videos · For Educational Use Only
+    Gemini Vision · Gemini Image · Veo 3.1 · For Educational Use Only
   </span>
 </div>
 """, unsafe_allow_html=True)
